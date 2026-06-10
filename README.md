@@ -67,6 +67,8 @@ cp .claude/skills/claudecode-plan-build-orchestrator/agents/*.md .claude/agents/
 
 This registers the `plan` (read-only) and `build` (read+write+execute) subagents so the orchestrator can dispatch them via the Task tool. Mode A needs no agent install.
 
+> **Restart Claude Code after copying the agents.** Newly added `.claude/agents/*.md` files are only picked up at startup — until you restart, `subagent_type: "plan"`/`"build"` won't resolve (and `"plan"` may silently fall back to the built-in `Plan` agent).
+
 ### Use It
 
 Tell Claude Code any of:

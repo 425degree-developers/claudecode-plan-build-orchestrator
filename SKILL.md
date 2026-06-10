@@ -182,7 +182,7 @@ Two subagents ship with this skill in [agents/](agents/):
 - `plan` -- read-only tools only (Read, Glob, Grep, WebFetch, read-only Bash). Cannot edit, write, or run mutating commands. Produces the structured plan artifact.
 - `build` -- full read+write+execute tools (Edit, Write, Bash). Implements the plan and loops on verification failures.
 
-Install them by copying [agents/](agents/) into `.claude/agents/` (project scope) or `~/.claude/agents/` (user scope). Then drive the pipeline by dispatching them:
+Install them by copying [agents/](agents/) into `.claude/agents/` (project scope) or `~/.claude/agents/` (user scope), then **restart Claude Code** so the new agents register (until restart, `subagent_type: "build"` won't resolve and `"plan"` may fall back to the built-in `Plan` agent). Then drive the pipeline by dispatching them:
 
 ```
 PLAN-1:  Task(subagent_type="plan",  prompt="<problem statement>. Produce the Phase-1 plan artifact.")
