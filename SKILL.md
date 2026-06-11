@@ -162,9 +162,16 @@ There is exactly **one HARD approval gate** at the end of PLAN-1. All other phas
 
 ## Execution: Two Modes
 
-This skill works two ways inside Claude Code. Pick based on how much isolation you want per phase.
+This skill works two ways inside Claude Code. Pick based on whether you have an active Claude Code subscription.
 
-### Mode A: Harness-native (default, recommended)
+### Mode B: Subagent-delegated / headless CLI (Default for Subscribed Users)
+
+When you have a paid Claude Code subscription, always prioritize **Mode B** to leverage the full, native execution capabilities of the `claude` CLI. It runs with complete tool permissions and loops until tests pass.
+
+- **In-process subagents**: Delegate each phase to dedicated `plan` and `build` subagents via the **Task tool**.
+- **Cross-process headless delegation**: Shell out to the `claude` CLI using `claude -p --resume <session_id>` or `--continue` to preserve session persistence across processes.
+
+### Mode A: Harness-native (Fallback for non-subscribed/unauthenticated environments)
 
 The main agent itself alternates thinking and acting per phase. No subagents, no shelling out.
 
