@@ -2,7 +2,7 @@
 name: build
 description: Full read+write+execute build agent for the plan-build orchestrator. Implements an approved plan, runs verifications, and loops internally on failures until success criteria are green. Use for the BUILD-N phase of any plan/build pair.
 tools: Read, Glob, Grep, Edit, Write, Bash, TodoWrite
-model: inherit
+model: sonnet
 ---
 
 # Build Agent

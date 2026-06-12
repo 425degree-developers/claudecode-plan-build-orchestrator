@@ -7,113 +7,21 @@ Deep dive on the lifecycle defined in [SKILL.md](../SKILL.md). Read this when yo
 - Internal failure / loop patterns (what to do when tests fail mid-build)
 - A worked example distilled from a real session
 
-## Table of Contents
-
-1. [Finite-State Machine](#1-finite-state-machine)
-2. [Per-Phase Prompt Shapes](#2-per-phase-prompt-shapes)
-3. [Failure and Loop Patterns](#3-failure-and-loop-patterns)
-4. [Compression Awareness](#4-compression-awareness)
-5. [Worked Example](#5-worked-example)
-6. [Subagent Fan-Out Rules](#6-subagent-fan-out-rules)
-
----
-
 ## 1. Finite-State Machine
 
 ```
-                                  START
-                                    |
-                                    v
-                          +-------------------+
-                          |  Pre-flight checks|  pwd, git status, gh auth,
-                          |                   |  companion-skill discovery,
-                          |                   |  test-runner discovery
-                          +---------+---------+
-                                    |
-                                    v
-                          +-------------------+
-                          |  PLAN-1           |  Problem analysis
-                          |  Problem + Fix    |  Root-cause matrix, assumptions,
-                          |                   |  success criteria
-                          +---------+---------+
-                                    |
-                          HARD APPROVAL GATE  <-- only HARD gate in the workflow
-                                    |  user: "yes" / "proceed" / "skip X"
-                                    v
-                          +-------------------+
-                          |  BUILD-1          |  Implement all fixes
-                          |  Fix + Verify     |  Loop internally until tests
-                          |                   |  /verifications green
-                          +---------+---------+
-                                    |  (auto-chain)
-                                    v
-                          +-------------------+
-                          |  PLAN-2           |  Read all docs, build gap matrix
-                          |  Docs Gap         |  [SKIP if no docs/]
-                          +---------+---------+
-                                    |
-                          SOFT GATE (auto unless open question)
-                                    |
-                                    v
-                          +-------------------+
-                          |  BUILD-2          |  Surgical edits to docs
-                          |  Apply Docs       |
-                          +---------+---------+
-                                    |  (auto-chain)
-                                    v
-                          +-------------------+
-                          |  PLAN-3           |  Plan knowledge layer update
-                          |  Knowledge Layer  |  -> graphify regen scope (3a)
-                          |  Plan             |  -> llm-wiki ingest scope (3b)
-                          |                   |  [SKIP 3a if no graphify-out/
-                          |                   |   no graphify skill]
-                          |                   |  [SKIP 3b if no wiki at WIKI_PATH
-                          |                   |   no llm-wiki skill]
-                          +---------+---------+
-                                    |  (auto-chain, no gate)
-                                    v
-                          +-------------------+
-                          |  BUILD-3          |  3a: run graphify regen
-                          |  Knowledge Layer  |      -> graphify-out/* regenerated
-                          |  Build            |  3b: llm-wiki ingest (if durable
-                          |                   |      insights from Phase 1)
-                          |                   |      -> wiki pages filed/updated
-                          +---------+---------+
-                                    |  (auto-chain)
-                                    v
-                          +-------------------+
-                          |  PLAN-4           |  N-commit breakdown,
-                          |  Commit Plan      |  file -> issue mapping
-                          |                   |  [SKIP if no git/GH remote]
-                          +---------+---------+
-                                    |
-                          SOFT GATE (auto unless open question -- e.g.
-                          "include graphify-out as separate commit?")
-                                    |
-                                    v
-                          +-------------------+
-                          |  BUILD-4          |  git checkout -b, N commits,
-                          |  Push + PR        |  push, gh pr create --draft
-                          +---------+---------+
-                                    |  (auto-chain)
-                                    v
-                          +-------------------+
-                          |  PLAN-5           |  gh issue list, triage table,
-                          |  Triage           |  close/comment/leave decision
-                          |                   |  [SKIP if no open issues]
-                          +---------+---------+
-                                    |
-                          SOFT GATE (auto unless open question -- e.g.
-                          "close all 8 or also comment on #17?")
-                                    |
-                                    v
-                          +-------------------+
-                          |  BUILD-5          |  gh issue close x N,
-                          |  Close + Comment  |  gh issue comment x M
-                          +---------+---------+
-                                    |
-                                    v
-                                  END
+START -> Pre-flight (pwd, git status, gh auth, skill + test-runner discovery)
+ -> PLAN-1 Problem + Fix      -> HARD GATE (user: "yes" / "proceed" / "skip X")
+ -> BUILD-1 Fix + Verify       (loop internally until verifications green)
+ -> PLAN-2 Docs Gap            [SKIP if no docs/] -> SOFT GATE
+ -> BUILD-2 Apply Docs
+ -> PLAN-3 Knowledge Layer     [SKIP 3a if no graphify-out/ or skill; 3b if no wiki or skill]
+ -> BUILD-3 3a graphify regen + 3b llm-wiki ingest
+ -> PLAN-4 Commit Plan         [SKIP if no git/GH remote] -> SOFT GATE
+ -> BUILD-4 Push + PR          (branch, N commits, push, gh pr create --draft)
+ -> PLAN-5 Triage              [SKIP if no open issues] -> SOFT GATE
+ -> BUILD-5 Close + Comment    (gh issue close x N, comment x M)
+ -> END
 ```
 
 ### Transitions and guards
@@ -169,43 +77,17 @@ The orchestrator extracts:
 
 ### 2.2 Plan-phase output shape
 
-Every plan-phase output has five mandatory sections:
-
-```markdown
-## Plan: <phase title>
-
-### Findings
-<structured table or matrix>
-
-### Assumptions (per karpathy guidelines)
-- Assumption: <statement>
-- Assumption: <statement>
-
-### Success Criteria
-- [ ] <verifiable outcome 1>
-- [ ] <verifiable outcome 2>
-- [ ] <verifiable outcome N>
-
-### Skill Principles Applied
-<if a companion skill was loaded, brief note on how its principles shaped the plan>
-
-### Next Step
-<HARD gate: explicit yes/no question | SOFT gate with open question: explicit question | SOFT gate without open question: "Proceeding to BUILD-N...">
-```
+Five mandatory sections (full schema in [SKILL.md](../SKILL.md#per-phase-template) and [agents/plan.md](../agents/plan.md)): `## Plan: <title>`, `### Findings` (table/matrix), `### Assumptions (per karpathy guidelines)`, `### Success Criteria` (single-command-checkable checklist), `### Skill Principles Applied`, `### Next Step` (gate question or "Proceeding to BUILD-N...").
 
 ### 2.3 Build-phase behavior shape
 
-```
-1. Re-read plan from context
-2. TodoWrite: materialize plan as a goal list
-3. Execute each todo, updating statuses in real time
-4. On failure: diagnose, surgical fix, retry. Do NOT escalate to plan.
-5. Emit summary block:
+(1) Re-read plan from context; (2) TodoWrite goal list; (3) execute sequentially, updating statuses; (4) on failure: diagnose, surgical fix, retry — never escalate to plan; (5) emit the summary block:
 
-   ## Build Summary
-   - Files changed: <list>
-   - Verifications: <test counts, exit codes, etc.>
-   - State: <what's true now that wasn't before>
+```
+## Build Summary
+- Files changed: <list>
+- Verifications: <test counts, exit codes, etc.>
+- State: <what's true now that wasn't before>
 ```
 
 ### 2.4 Cross-phase handoff signal
@@ -265,28 +147,11 @@ If the user issues a new intent mid-build, the build agent should:
 
 ## 4. Compression Awareness
 
-Long workflows may cross the context window limit. This skill expects Claude Code to handle compression via auto-compact. (In Mode B, compression is largely sidestepped: each phase runs in a fresh subagent context, and the orchestrator only retains the compact plan/Build-Summary artifacts.)
+Long workflows may cross the context window limit; Claude Code handles this via auto-compact. (Mode B largely sidesteps it: each phase runs in a fresh subagent context and the orchestrator retains only the compact plan/Build-Summary artifacts.)
 
-### 4.1 Compression boundaries are phase boundaries
-
-If the harness compresses conversation context, the compression ideally happens **between phases** (after a build summary, before the next plan). The topic name of each compression should reflect the phase it concludes:
-
-| Compression topic                | Phase concluded                |
-| -------------------------------- | ------------------------------ |
-| "Issues analysis and fix plan"   | PLAN-1                         |
-| "Implementation round 1"         | BUILD-1                        |
-| "Issue fixes and docs analysis"  | BUILD-2 (or accumulated)       |
-| "Docs sync and knowledge layer update"  | BUILD-3                        |
-| "Commit and PR"                  | BUILD-4                        |
-| "Issue triage and close"         | BUILD-5                        |
-
-### 4.2 If compression happens mid-phase
-
-If compression occurs during a build phase, the build agent should re-read its TodoWrite list (which survives compression) and the most recent build summary block, then continue execution from the next incomplete todo. The success criterion is part of the original plan and is also captured in the todo list.
-
-### 4.3 Summary blocks as recovery anchors
-
-The build-phase summary block is the **recovery anchor** for the next phase. Even if the entire plan-phase output is compressed away, the build summary block contains enough information (files changed, criteria met, state) for the next phase to proceed.
+- **Boundaries:** compression ideally lands between phases (after a build summary, before the next plan), with the compression topic named for the phase it concludes.
+- **Mid-phase:** if compression hits during a build, re-read the TodoWrite list (which survives compression) and the most recent build summary, then continue from the next incomplete todo.
+- **Recovery anchors:** the build summary block carries enough state (files changed, criteria met) for the next phase to proceed even if the plan output was compressed away.
 
 ---
 
