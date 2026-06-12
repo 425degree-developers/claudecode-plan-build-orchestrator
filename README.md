@@ -20,12 +20,15 @@ The skill defines a **deterministic pipeline of plan/build pairs**:
 
 **Failure policy:** build phases loop internally on test/command failures. They never escalate back to plan unless the user issues a new intent or 3+ retries fail.
 
-## Two Execution Modes
+## Three Execution Modes
 
-- **Mode A -- Harness-native (default, recommended):** the main agent alternates thinking/acting per phase. Plan phases run in Claude Code **Plan Mode** (read-only, ends with the `ExitPlanMode` approval prompt — a natural fit for the PLAN-1 HARD gate); build phases run with the full tool set. No subagents, no shelling out.
-- **Mode B -- Subagent-delegated (optional):** each phase runs in an isolated context via the **Task tool**, dispatching the bundled `plan` (read-only) and `build` (read+write+execute) subagents. The main conversation threads context between phases. A `claude -p --resume` headless variant is documented for cross-process delegation.
+Pick by **who the orchestrator is**:
 
-Mode A is described inline in [SKILL.md](SKILL.md). Mode B is documented in [references/plan-build-primitives.md](references/plan-build-primitives.md) and [references/claude-code-cli-reference.md](references/claude-code-cli-reference.md).
+- **Mode A -- Harness-native (interactive Claude Code):** the main agent alternates thinking/acting per phase. Plan phases run in Claude Code **Plan Mode** (read-only, ends with the `ExitPlanMode` approval prompt — a natural fit for the PLAN-1 HARD gate); build phases run with the full tool set. No subagents, no shelling out.
+- **Mode B -- Subagent-delegated (Claude Code orchestrates):** each phase runs in an isolated context via the **Task tool**, dispatching the bundled `plan` (read-only) and `build` (read+write+execute) subagents. The main conversation threads context between phases.
+- **Mode C -- External orchestrator (e.g. Hermes):** an outside agent or script shells out to **lean headless `claude -p` workers** — explicit `--model`, `--permission-mode`, `--setting-sources project`, `--strict-mcp-config`, streamed output, budget cap. The Task tool doesn't exist outside a Claude Code session, so this is the only delegation path for external orchestrators; a bare `claude -p` (no flags) inherits the user's full interactive config and runs many times slower.
+
+Modes A and C are described in [SKILL.md](SKILL.md). Delegation mechanics for B and C are detailed in [references/plan-build-primitives.md](references/plan-build-primitives.md) and [references/claude-code-cli-reference.md](references/claude-code-cli-reference.md).
 
 ## Soft Dependencies (Companion Skills)
 

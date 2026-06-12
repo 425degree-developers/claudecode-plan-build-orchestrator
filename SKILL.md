@@ -1,6 +1,6 @@
 ---
 name: claudecode-plan-build-orchestrator
-description: End-to-end workflow skill that drives a 6-phase pipeline (problem -> fix+verify -> docs sync -> knowledge graph -> commit+PR -> issue triage) by alternating plan and build modes. Use when the user asks to "address issues", "ship it", "make a PR + close tickets", or any multi-phase coding task that spans code, tests, docs, git, and GitHub issues. Built for Claude Code: runs harness-natively using Plan Mode + the standard tool set, and can delegate per phase to dedicated `plan` and `build` subagents via the Task tool (or shell out to `claude -p --resume`). Applies karpathy-guidelines discipline (assumption surfacing, surgical changes, verifiable success criteria) at every phase.
+description: End-to-end workflow skill that drives a 6-phase pipeline (problem -> fix+verify -> docs sync -> knowledge graph -> commit+PR -> issue triage) by alternating plan and build modes. Use when the user asks to "address issues", "ship it", "make a PR + close tickets", or any multi-phase coding task that spans code, tests, docs, git, and GitHub issues. Three execution modes by orchestrator: (A) harness-native inside interactive Claude Code using Plan Mode, (B) Task-tool delegation to dedicated `plan`/`build` subagents, (C) an external orchestrator (e.g. Hermes) shelling out to lean headless `claude -p` workers — pinned model, project-only settings, no MCP, explicit permission mode, streamed output. Applies karpathy-guidelines discipline (assumption surfacing, surgical changes, verifiable success criteria) at every phase.
 license: Apache-2.0
 compatibility: |
   Required: Claude Code (or any harness with read+write+execute tools and a Task/subagent mechanism).
@@ -21,175 +21,66 @@ metadata:
 
 # Plan -> Build -> Ship Orchestrator (Claude Code)
 
-A structured 6-phase lifecycle for taking a batch of issues, bugs, or a feature request from **problem** all the way to **fixed + tested + documented + committed + PR-opened + issues-closed** in one autonomous run.
-
-Built for Claude Code. The plan/build separation maps directly onto Claude Code's native **Plan Mode** and its **subagent** mechanism, so the workflow feels first-class rather than bolted on.
-
-Distilled from a real reference session (see [references/issue-resolution-workflow.md](references/issue-resolution-workflow.md) for the worked example).
+A structured 6-phase lifecycle for taking a batch of issues, bugs, or a feature request from **problem** all the way to **fixed + tested + documented + committed + PR-opened + issues-closed** in one autonomous run. The plan/build separation maps onto Claude Code's native **Plan Mode** and **subagent** mechanism. Distilled from a real reference session ([references/issue-resolution-workflow.md](references/issue-resolution-workflow.md)).
 
 ## When to Use
 
-Trigger this skill when the user's request matches any of:
+Trigger when the user's request matches: "address issues in <repo>" / "fix all the bugs"; "ship it" / "get this to green and PR"; "plan, fix, test, document, and PR <feature>"; any multi-issue or multi-file task touching code, tests, docs, and git; explicit plan/build separation; any "think first, code second, then verify, document, ship" task.
 
-- "Address issues in <repo>" / "Fix all the bugs in <tracker>"
-- "Ship it" / "Make it release-ready" / "Get this to green and PR"
-- "Plan, fix, test, document, and PR <feature>"
-- A multi-issue or multi-file task that touches code, tests, docs, and git
-- Explicit user request for plan/build separation
-- Any task where "think first, code second, then verify, document, and ship" applies
-
-**Do NOT use for:**
-- Single-line typo fixes -> just edit
-- Pure investigation with no expectation of code changes -> use the plan-only pattern in [references/plan-build-primitives.md](references/plan-build-primitives.md)
-- Tasks explicitly scoped to one phase only ("just commit what I have") -> invoke the relevant companion skill directly (e.g. `yeet`)
+**Do NOT use for:** single-line typo fixes (just edit); pure investigation with no expected code changes (use the plan-only pattern in [references/plan-build-primitives.md](references/plan-build-primitives.md)); tasks scoped to one phase only ("just commit what I have" -> invoke the relevant companion skill, e.g. `yeet`).
 
 ## The 6-Phase Lifecycle
 
-The workflow is a deterministic pipeline of **plan/build pairs**, one pair per logical concern. The agent alternates thinking (plan) and acting (build) modes.
+A deterministic pipeline of **plan/build pairs**, one pair per logical concern, alternating thinking (plan) and acting (build):
 
 ```
-                                START
-                                  |
-                                  v
-                          +---------------+
-                 PHASE 1  |   PLAN-1      |  Problem analysis + fix plan
-                          |   Problem     |  -> table of root causes + fixes
-                          |               |  -> explicit assumptions
-                          |               |  -> success criteria
-                          |               |  -> HARD APPROVAL GATE
-                          +-------+-------+
-                                  |  user: "yes" / "proceed"
-                                  v
-                          +---------------+
-                          |   BUILD-1     |  Implement all fixes
-                          |   Fix+Verify  |  loop internally until
-                          |               |  tests/verifications green
-                          +-------+-------+
-                                  |  (auto-chain)
-                                  v
-                          +---------------+
-                 PHASE 2  |   PLAN-2      |  Docs gap analysis
-                          |   Docs Gap    |  -> matrix of docs x gaps
-                          +-------+-------+
-                                  |  (auto-chain unless open question)
-                                  v
-                          +---------------+
-                          |   BUILD-2     |  Surgical doc edits
-                          |   Apply Docs  |
-                          +-------+-------+
-                                  |  (auto-chain)
-                                  v
-                          +---------------+
-                 PHASE 3  |   PLAN-3      |  Knowledge layer update plan
-                          |   Knowledge   |  -> graphify regen scope (3a)
-                          |   Layer Plan  |  -> llm-wiki ingest scope (3b)
-                          |               |  (SKIP 3a if no graphify-out/
-                          |               |   OR graphify skill missing)
-                          |               |  (SKIP 3b if no wiki at WIKI_PATH
-                          |               |   OR llm-wiki skill missing)
-                          +-------+-------+
-                                  |  (auto-chain)
-                                  v
-                          +---------------+
-                          |   BUILD-3     |  3a: run graphify regen
-                          |   Knowledge   |      -> graphify-out/* regenerated
-                          |   Layer Build |  3b: llm-wiki ingest (if durable
-                          |               |      insights from Phase 1)
-                          |               |      -> wiki pages filed/updated
-                          +-------+-------+
-                                  |  (auto-chain)
-                                  v
-                          +---------------+
-                 PHASE 4  |   PLAN-4      |  Commit/PR strategy
-                          |   Commit Plan |  -> N-commit breakdown
-                          |               |  -> file -> issue mapping
-                          +-------+-------+
-                                  |  (auto-chain unless open question)
-                                  v
-                          +---------------+
-                          |   BUILD-4     |  git checkout -b, commits,
-                          |   Push + PR   |  push, gh pr create --draft
-                          +-------+-------+
-                                  |  (auto-chain)
-                                  v
-                          +---------------+
-                 PHASE 5  |   PLAN-5      |  Issue triage plan
-                          |   Triage      |  -> status table per issue
-                          |               |  -> close/comment/leave decision
-                          |               |  (SKIP if no GH issues)
-                          +-------+-------+
-                                  |  (auto-chain unless open question)
-                                  v
-                          +---------------+
-                          |   BUILD-5     |  gh issue close x N
-                          |   Close+Comm  |  gh issue comment x M
-                          +-------+-------+
-                                  |
-                                  v
-                                END
+PLAN-1 Problem analysis (root causes, assumptions, criteria) -> HARD GATE: user approval
+ -> BUILD-1 Implement fixes, loop internally until verifications green
+ -> PLAN-2 Docs gap matrix -> SOFT GATE -> BUILD-2 Surgical doc edits
+ -> PLAN-3 Knowledge layer plan -> BUILD-3 3a: graphify regen, 3b: llm-wiki ingest
+ -> PLAN-4 Commit/PR strategy -> SOFT GATE -> BUILD-4 Branch + commits + push + draft PR
+ -> PLAN-5 Issue triage table -> SOFT GATE -> BUILD-5 gh issue close x N / comment x M
+ -> END
 ```
-
-### Phase summary table
 
 | # | Plan output                                | Build artifacts                                | Soft-dep skill                   | Skip rule                                  |
 | - | ------------------------------------------ | ---------------------------------------------- | -------------------------------- | ------------------------------------------ |
 | 1 | Root-cause matrix + assumptions + criteria | Code/test/config edits; verifications green    | karpathy-guidelines              | (never skip)                               |
 | 2 | Docs gap matrix with priority              | Surgical edits to existing docs                | coding-agents-docs-guideline     | no `docs/` directory                       |
-| 3 | Knowledge layer update plan (graph + wiki) | Regenerated `graphify-out/` artifacts + filed/updated wiki pages for durable insights | graphify, llm-wiki | graph sub-step: no `graphify-out/` or no graphify skill. wiki sub-step: no wiki at `$WIKI_PATH`/`~/wiki` or no llm-wiki skill |
+| 3 | Knowledge layer update plan (graph + wiki) | Regenerated `graphify-out/` + filed/updated wiki pages | graphify, llm-wiki       | 3a: no `graphify-out/` or no graphify skill; 3b: no wiki at `$WIKI_PATH`/`~/wiki` or no llm-wiki skill |
 | 4 | Commit breakdown (N focused commits)       | Branch + N commits + push + draft PR           | yeet                             | no git repo / no GitHub remote             |
 | 5 | Triage table (close/comment/leave)         | `gh issue close` x N, `gh issue comment` x M   | gh-address-comments              | `gh issue list --state open` returns empty |
 
 ## Approval Gates
 
-There is exactly **one HARD approval gate** at the end of PLAN-1. All other phases auto-chain.
+- **HARD gate (after PLAN-1 — the only one):** present the plan and **stop** for an explicit yes/no or multi-choice answer ("yes", "proceed", "skip X"). PLAN-1 sets scope; getting it wrong wastes the whole pipeline. In Claude Code, PLAN-1 = **Plan Mode**, and `ExitPlanMode` is the approval prompt.
+- **SOFT gates (after PLAN-2, PLAN-4, PLAN-5):** present output and auto-proceed to build **unless** there is a literal open question the agent cannot resolve from context (ambiguous scope, conflicting preferences, missing credentials). If zero open questions, announce "Proceeding to BUILD-N" and continue.
+- **No gates** after PLAN-3 or after any BUILD — auto-chain unconditionally; the build summary block is the handoff signal.
 
-### HARD gate (after PLAN-1)
+## Execution: Three Modes
 
-- The agent presents the plan and **stops** with an explicit yes/no or multi-choice question.
-- The agent must wait for a user response (e.g. "yes", "proceed", "skip X", "also handle Y").
-- Rationale: PLAN-1 establishes scope and approach -- getting it wrong wastes the entire downstream pipeline.
-- In Claude Code, PLAN-1 naturally corresponds to **Plan Mode**: stay in Plan Mode through the analysis, then present the plan via `ExitPlanMode` (which itself is the approval prompt).
+Pick the mode by **who the orchestrator is** — not by subscription tier:
 
-### SOFT gates (after PLAN-2, PLAN-4, PLAN-5)
+| Mode | Orchestrator                          | Delegation mechanism                          | Use when                                                        |
+| ---- | ------------------------------------- | --------------------------------------------- | --------------------------------------------------------------- |
+| A    | Claude Code itself (interactive)      | None — main agent alternates plan/build       | Running the pipeline inside an interactive Claude Code session   |
+| B    | Claude Code itself                    | Task-tool subagents (`plan`, `build`)         | You want isolated per-phase context + tool-level RO enforcement  |
+| C    | An external agent or script (e.g. **Hermes**) | Lean headless `claude -p` worker processes | The orchestrator lives outside Claude Code and shells out for coding work |
 
-- The plan agent presents its output and **auto-proceeds to build** unless it has a literal open question that requires user input.
-- An open question is one the agent cannot resolve from conversation context -- e.g. ambiguous scope, conflicting user preferences, missing credentials.
-- If the plan surfaces zero open questions, the agent transitions to build mode immediately and announces the transition ("Proceeding to BUILD-N").
+The Task tool only exists *inside* a Claude Code session. An external orchestrator like Hermes cannot dispatch Task subagents — its only delegation path is Mode C, and Mode C workers **must be configured lean** (see below) or each call inherits the user's full interactive setup (largest model, all plugins, MCP servers, ask-gated permissions) and runs many times slower than necessary.
 
-### No gates (after PLAN-3, after every BUILD)
-
-- Auto-chain unconditionally. The build agent's summary block acts as the handoff signal.
-
-## Execution: Two Modes
-
-This skill works two ways inside Claude Code. Pick based on whether you have an active Claude Code subscription.
-
-### Mode B: Subagent-delegated / headless CLI (Default for Subscribed Users)
-
-When you have a paid Claude Code subscription, always prioritize **Mode B** to leverage the full, native execution capabilities of the `claude` CLI. It runs with complete tool permissions and loops until tests pass.
-
-- **In-process subagents**: Delegate each phase to dedicated `plan` and `build` subagents via the **Task tool**.
-- **Cross-process headless delegation**: Shell out to the `claude` CLI using `claude -p --resume <session_id>` or `--continue` to preserve session persistence across processes.
-
-### Mode A: Harness-native (Fallback for non-subscribed/unauthenticated environments)
+### Mode A: Harness-native (interactive Claude Code)
 
 The main agent itself alternates thinking and acting per phase. No subagents, no shelling out.
 
-- **Plan mode** = the agent uses read-only tools (Read, Glob, Grep, WebFetch, and read-only Bash like `git status`, `gh issue list`) and produces structured output. It does NOT edit, write, or run write commands. It may use TodoWrite to declare its plan. In Claude Code, engage **Plan Mode** (Shift+Tab) for this; Plan Mode enforces read-only at the harness level and ends with an `ExitPlanMode` approval prompt -- a perfect fit for the PLAN-1 HARD gate.
-- **Build mode** = the agent uses read+write+execute tools (Edit, Write, Bash) to implement the plan. It may continue using TodoWrite as a goal ledger. Exit Plan Mode to enter build.
+- **Plan mode** = read-only tools (Read, Glob, Grep, WebFetch, read-only Bash like `git status`, `gh issue list`) producing structured output; no edits, writes, or mutating commands. TodoWrite is allowed for declaring the plan. Engage Claude Code **Plan Mode** (Shift+Tab): it enforces read-only at the harness level and ends with the `ExitPlanMode` approval prompt — a perfect fit for the PLAN-1 HARD gate.
+- **Build mode** = read+write+execute tools (Edit, Write, Bash) implementing the plan, with TodoWrite as the goal ledger. Exit Plan Mode to enter build.
 
-The "mode switch" is a *behavioral* switch the agent performs itself. The agent announces each switch ("Switching to BUILD mode for Phase 1 implementation").
+The "mode switch" is *behavioral*; the agent announces each switch ("Switching to BUILD mode for Phase 1 implementation").
 
-### Mode B: Subagent-delegated (optional)
+### Mode B: Subagent-delegated (Claude Code as orchestrator)
 
-When you want each phase to run with a clean, isolated context window (and to enforce read-only vs. read-write at the tool level), delegate each phase to a dedicated subagent via the **Task tool**.
-
-Two subagents ship with this skill in [agents/](agents/):
-
-- `plan` -- read-only tools only (Read, Glob, Grep, WebFetch, read-only Bash). Cannot edit, write, or run mutating commands. Produces the structured plan artifact.
-- `build` -- full read+write+execute tools (Edit, Write, Bash). Implements the plan and loops on verification failures.
-
-Install them by copying [agents/](agents/) into `.claude/agents/` (project scope) or `~/.claude/agents/` (user scope), then **restart Claude Code** so the new agents register (until restart, `subagent_type: "build"` won't resolve and `"plan"` may fall back to the built-in `Plan` agent). Then drive the pipeline by dispatching them:
+Each phase runs in a clean, isolated context window with read-only vs. read-write enforced at the tool level. Two subagents ship in [agents/](agents/): `plan` (read-only: Read, Glob, Grep, WebFetch, read-only Bash) and `build` (read+write+execute: Edit, Write, Bash). Install by copying [agents/](agents/) into `.claude/agents/` (project) or `~/.claude/agents/` (user), then **restart Claude Code** so they register (until restart, `subagent_type: "build"` won't resolve and `"plan"` may fall back to the built-in `Plan` agent). Drive the pipeline:
 
 ```
 PLAN-1:  Task(subagent_type="plan",  prompt="<problem statement>. Produce the Phase-1 plan artifact.")
@@ -199,130 +90,120 @@ PLAN-2:  Task(subagent_type="plan",  prompt="Analyze docs gaps given the Phase-1
 ... and so on for each phase.
 ```
 
-Unlike opencode's `-s <session_id>` flag, **context does not persist across Task calls** -- each subagent starts fresh. So the orchestrator (the main agent) is responsible for threading context: pass the prior phase's plan and/or build summary into the next subagent's prompt. The main conversation is the single source of truth; the subagents are stateless workers.
+**Context does not persist across Task calls** — each subagent starts fresh. The orchestrator threads context: pass the prior phase's plan and/or build summary into the next subagent's prompt. The main conversation is the single source of truth; subagents are stateless workers.
 
-### Mode B (alternative): `claude -p` headless delegation
+### Mode C: External orchestrator -> lean headless `claude -p` workers
 
-If you need cross-process delegation (e.g. the orchestrator is itself an external script), shell out to the Claude Code CLI in headless mode. This is the literal analog of opencode's `opencode run -s`:
+When the orchestrator is an external agent (e.g. Hermes) or a script, shell out to the Claude Code CLI in headless mode — but **never with a bare `claude -p "<prompt>"`**. A bare invocation inherits the user's full interactive configuration: their pinned model (often the largest/slowest), every enabled plugin and MCP server, and permission rules written for an interactive session. Headless mode has no user to answer permission prompts, so every `ask` rule silently becomes a **denial** and the worker burns minutes retrying workarounds.
+
+The canonical lean worker invocation:
 
 ```bash
-# Phase 1: Plan (capture the session id for resumption)
-claude -p "Plan: <feature>. Produce the Phase-1 plan artifact." \
-  --permission-mode plan --output-format json > plan1.json
-SESSION_ID=$(jq -r '.session_id' plan1.json)
-
-# Phase 1: Build (resume the SAME session so plan context carries over)
-claude -p --resume "$SESSION_ID" "Implement the approved plan. Loop until tests pass."
-
-# Phase 2: Plan (still the same session)
-claude -p --resume "$SESSION_ID" "Check gaps in docs and plan surgical updates."
-
-# ... and so on for each phase
+# BUILD-phase worker (writes code, runs tests)
+claude -p "$(cat build1_prompt.md)" \
+  --model sonnet \
+  --permission-mode bypassPermissions \
+  --setting-sources project \
+  --strict-mcp-config \
+  --output-format stream-json --verbose \
+  --max-budget-usd 5 \
+  > build1.ndjson 2>&1 &
 ```
 
-**Always pass `--resume <SESSION_ID>`** after the first command -- without it, each `claude -p` starts a fresh session and you lose the plan context. See [references/plan-build-primitives.md](references/plan-build-primitives.md) for the complete reference and advanced patterns (multi-round planning, parallel worktrees, plan-only, build-only) and [references/claude-code-cli-reference.md](references/claude-code-cli-reference.md) for the full flag list.
+Why each flag matters (all verified against CLI 2.1.x):
+
+| Flag | Why |
+| ---- | --- |
+| `--model sonnet` | Workers otherwise inherit the user's pinned interactive model (e.g. `claude-fable-5[1m]`). Build work is mechanical — use `sonnet` (or `haiku` for trivial tasks); reserve the big model for PLAN-1 if anywhere. |
+| `--permission-mode bypassPermissions` | Headless runs cannot answer prompts; `ask` rules become denials. `acceptEdits` only covers file edits — Bash still asks. In a trusted sandbox, bypass; otherwise scope with `--allowedTools "Edit Write Read Glob Grep Bash(*)"`. |
+| `--setting-sources project` | Skips user-level settings: no global plugin/MCP loading, no inherited model pin, no interactive `ask` rules. Project `.claude/settings.json` (if any) still applies. |
+| `--strict-mcp-config` | No MCP servers unless explicitly passed via `--mcp-config`. Stops playwright/context7-style servers from spawning into every worker. |
+| `--output-format stream-json --verbose` | Emits NDJSON events live. The orchestrator can `tail -f` for liveness instead of staring at a silent buffered pipe for minutes. (`stream-json` requires `--verbose` with `-p`.) |
+| `--max-budget-usd <n>` | Runaway cap. Current CLI builds have **no `--max-turns`** — budget is the backstop. |
+| `> file &` (background) | Build phases legitimately run for minutes. Run workers async and poll; don't block the orchestrator's foreground on a pipe. |
+
+Capture the session id from the `init` event, and re-pass the flags on **every** resume (flags are per-invocation, not persisted with the session):
+
+```bash
+SESSION_ID=$(jq -r 'select(.type=="system" and .subtype=="init") | .session_id' build1.ndjson | head -1)
+
+# Next phase, same session so context carries over — same lean flags again
+claude -p --resume "$SESSION_ID" "$(cat plan2_prompt.md)" \
+  --model sonnet --permission-mode bypassPermissions \
+  --setting-sources project --strict-mcp-config \
+  --output-format stream-json --verbose --max-budget-usd 5 > plan2.ndjson 2>&1 &
+```
+
+For PLAN-phase workers, swap `--permission-mode bypassPermissions` for `--permission-mode plan` (read-only enforced at the harness level).
+
+**Prompt design for workers** (this is where most wall-clock hides):
+
+- **One concern per call.** Don't batch three tasks into one "wave" prompt — split them so failures are isolated and progress is observable.
+- **Never ask a worker to hand-type large artifacts.** A 50–100KB fixture is ~25k output tokens — minutes of pure generation on any model. Instruct the worker to *write a small generator script* and run it instead.
+- **Thread context explicitly** — either `--resume` the same session, or paste the prior phase's plan/Build Summary into the prompt. Don't assume the worker knows anything.
+
+See [references/plan-build-primitives.md](references/plan-build-primitives.md) for advanced patterns (multi-round planning, parallel worktrees, plan-only, build-only) and [references/claude-code-cli-reference.md](references/claude-code-cli-reference.md) for the full flag list.
 
 ## Per-Phase Template
-
-Every plan/build pair follows the same shape.
 
 ### Plan-phase output schema
 
 Each plan output MUST include:
 
-1. **Structured table or matrix** -- root causes x fixes, docs x gaps, files x commits, issues x actions. Tables over prose.
-2. **Explicit assumptions** -- one-line bullets, prefixed `Assumption:`. Surface anything uncertain. If a karpathy-guidelines skill is loaded, name the section "Assumptions (per karpathy guidelines)".
-3. **Success criteria** -- a checklist of verifiable outcomes (test counts, file paths, exit codes, gh issue states). Each item must be checkable by a single command.
-4. **Skill acknowledgements** -- if a companion skill was loaded, briefly note how its principles were applied.
-5. **Trailing question OR auto-proceed** -- if HARD gate: explicit yes/no or multi-choice question. If SOFT gate with open question: explicit question. If SOFT gate without open question: announcement that build will proceed.
+1. **Structured table or matrix** — root causes x fixes, docs x gaps, files x commits, issues x actions. Tables over prose.
+2. **Explicit assumptions** — one-line bullets prefixed `Assumption:`. If the karpathy-guidelines skill is loaded, name the section "Assumptions (per karpathy guidelines)".
+3. **Success criteria** — a checklist of verifiable outcomes (test counts, file paths, exit codes, gh issue states), each checkable by a single command.
+4. **Skill acknowledgements** — if a companion skill was loaded, briefly note how its principles were applied.
+5. **Trailing question OR auto-proceed** — HARD gate: explicit question; SOFT gate with open question: explicit question; otherwise: announce that build proceeds.
 
 ### Build-phase behavior
 
-Each build phase MUST:
-
-1. **Re-read the plan** from conversation context (or summary if compressed; in Mode B, from the prompt the orchestrator threads in).
-2. **Materialize the plan as a TodoWrite list** -- one todo per actionable item, plus a final verification todo.
-3. **Execute sequentially**, updating todo statuses in real time.
-4. **Loop on failure** -- if a command exits non-zero or a test fails, the build agent diagnoses, applies a targeted fix, and retries. It does NOT escalate back to plan unless the user issues a new intent.
-5. **Emit a summary block at the end** -- what changed (file list), what passed (test counts / exit codes), what's the new state. The summary is the handoff signal to the next phase.
+Each build phase MUST: (1) re-read the plan from context (or from the prompt the orchestrator threads in); (2) materialize it as a TodoWrite list — one todo per item plus a final verification todo; (3) execute sequentially, updating statuses in real time; (4) loop on failure — diagnose, apply a targeted fix, retry; never escalate back to plan for the same scope; (5) emit a summary block — files changed, verifications passed, new state — as the handoff signal to the next phase.
 
 ## Failure Policy
 
-**Build phases loop internally.** They never escalate back to plan for the same scope.
+Build phases loop internally. On failure: read the output -> diagnose the root cause (no need to ask the user) -> apply the minimum surgical fix -> re-run the failed command (or whole suite if the fix is broad) -> repeat until the criterion is met.
 
-When a command fails:
-1. Read the failure output.
-2. Diagnose the root cause (no need to ask the user).
-3. Apply a targeted, surgical fix -- the minimum diff that resolves the failure.
-4. Re-run the failed command (or the whole verification suite if the fix is broad).
-5. Repeat until success criterion is met.
-
-**Escalate back to plan only when:**
-- The user issues a new intent that requires fresh investigation (not the same scope).
-- The failure reveals that the plan was fundamentally wrong (rare; surface this explicitly to the user before re-planning).
-- The build has looped 3+ times on the same failure without progress (signal to stop and ask).
+Escalate back to plan **only** when: (1) the user issues a new intent requiring fresh investigation; (2) the failure reveals the plan was fundamentally wrong (rare — surface explicitly before re-planning); (3) 3+ loops on the same failure without progress — stop and ask.
 
 ## Companion Skills (Soft Dependencies)
 
-Each phase has a recommended companion skill. The orchestrator loads the named skill at the start of the corresponding plan phase. If the companion is missing, fall back to the inline behavior described below.
+Load the named skill at the start of its phase via the `Skill` tool (e.g. `Skill(yeet)` at PLAN-4). If missing, fall back inline:
 
-| Phase | Companion skill              | Role                                  | Fallback if missing                                |
-| ----- | ---------------------------- | ------------------------------------- | -------------------------------------------------- |
-| 1     | karpathy-guidelines          | Shapes plan output (assumptions, surgical, criteria) | Inline the four karpathy principles (see below) |
-| 1     | security-best-practices (opt)| Review if fixes touch auth/secrets    | Skip if no security-sensitive code in scope        |
-| 2     | coding-agents-docs-guideline | Enforces doc style/structure          | Plain markdown edits, match existing doc style     |
-| 3     | graphify                     | Runs knowledge graph regen (structural layer) | Skip sub-step 3a entirely                           |
-| 3     | llm-wiki                     | Files durable insights as wiki pages (editorial layer) | Skip sub-step 3b entirely. See [references/knowledge-layer-workflow.md](references/knowledge-layer-workflow.md) |
-| 4     | yeet                         | Standardizes commit + PR flow         | Inline git/gh commands following yeet's rules      |
-| 5     | gh-address-comments          | Standardizes issue close/comment      | Inline `gh issue close` / `gh issue comment`       |
+| Phase | Companion skill              | Fallback if missing                                |
+| ----- | ---------------------------- | -------------------------------------------------- |
+| 1     | karpathy-guidelines          | Inline the four karpathy principles (below)        |
+| 1 (opt)| security-best-practices     | Skip unless fixes touch auth/secrets               |
+| 2     | coding-agents-docs-guideline | Plain markdown edits, match existing doc style     |
+| 3     | graphify (structural layer)  | Skip sub-step 3a entirely                          |
+| 3     | llm-wiki (editorial layer)   | Skip sub-step 3b entirely ([references/knowledge-layer-workflow.md](references/knowledge-layer-workflow.md)) |
+| 4     | yeet                         | Inline git/gh commands following yeet's rules      |
+| 5     | gh-address-comments          | Inline `gh issue close` / `gh issue comment`       |
 
-In Claude Code, load a companion skill at the start of its phase via the `Skill` tool (e.g. `Skill(yeet)` at PLAN-4). If the skill is not installed, fall back to the inline behavior.
+Inline karpathy principles (Phase-1 fallback): (1) **think before coding** — surface assumptions; present competing interpretations rather than picking silently; (2) **simplicity first** — minimum diff, no speculative abstractions; (3) **surgical changes** — touch only what's necessary, don't improve adjacent code, match existing style; (4) **goal-driven** — every fix has a verifiable success criterion; loop until verified.
 
-### Inline karpathy principles (fallback if karpathy-guidelines skill is missing)
+## Skip Rules
 
-When the karpathy skill is unavailable, the plan-phase output for Phase 1 must still apply these four principles:
+Check at the start of each plan phase; if true, jump to the next non-skippable phase and announce the skip with a one-line reason:
 
-1. **Think before coding** -- surface assumptions explicitly. If uncertain, ask. If multiple interpretations exist, present them rather than picking silently.
-2. **Simplicity first** -- minimum diff that solves the problem. No speculative abstractions, no flexibility that wasn't requested.
-3. **Surgical changes** -- touch only what's necessary. Don't improve adjacent code, comments, or formatting. Match existing style.
-4. **Goal-driven execution** -- every fix has a verifiable success criterion (a test, an exit code, a file content check). Loop until verified.
-
-## Optional Skip Rules
-
-Apply these checks at the start of each plan phase. If a skip condition is true, jump directly to the next non-skippable phase.
-
-- **Phase 2 (docs)**: skip if `docs/` does not exist OR `ls docs/` returns empty.
-- **Phase 3 (knowledge layer):**
-  - Sub-step 3a (graphify): skip if `graphify-out/` does not exist OR the `graphify` skill is not installed.
-  - Sub-step 3b (llm-wiki): skip if no wiki exists at `$WIKI_PATH` (default `~/wiki`) OR the `llm-wiki` skill is not installed. Also skip if Phase 1 produced no durable insights (see [references/knowledge-layer-workflow.md](references/knowledge-layer-workflow.md) for the checklist).
-  - If both sub-steps are skipped, skip Phase 3 entirely.
-- **Phase 4 (commit/PR)**: skip if not in a git repo (`git rev-parse --is-inside-work-tree` fails) OR no GitHub remote (`git remote get-url origin` fails). Report to user.
-- **Phase 5 (issue triage)**: skip if `gh issue list --state open --limit 1` returns empty. Also skip if `gh auth status` fails and the user declines to authenticate.
-
-If any phase is skipped, announce the skip with a one-line reason before moving on.
+- **Phase 2:** `docs/` missing OR `ls docs/` empty.
+- **Phase 3:** 3a if `graphify-out/` missing OR no graphify skill; 3b if no wiki at `$WIKI_PATH` (default `~/wiki`) OR no llm-wiki skill OR no durable Phase-1 insights ([checklist](references/knowledge-layer-workflow.md)). Both skipped -> skip Phase 3 entirely.
+- **Phase 4:** `git rev-parse --is-inside-work-tree` fails OR `git remote get-url origin` fails. Report to user.
+- **Phase 5:** `gh issue list --state open --limit 1` empty, OR `gh auth status` fails and the user declines to authenticate.
 
 ## Pre-Flight Checks
 
-Before entering PLAN-1, the agent performs these one-time checks:
+Before PLAN-1, run once and report a one-block summary:
 
-1. **Working directory** -- confirm the project root. Use `pwd` and `git rev-parse --show-toplevel`. If the user provided a path, cd there.
-2. **Git status** -- `git status -sb`. Note any uncommitted changes (they will become part of the PR).
-3. **GitHub CLI** -- `gh --version && gh auth status`. If unauthenticated, ask the user to run `gh auth login` before phase 4/5.
-4. **Companion skills** -- quick discovery: which of the soft-dep skills are loadable? For Phase 3 specifically, probe both layers:
-   - graphify: check for `graphify-out/` AND `graphify` skill loadable
-   - llm-wiki: check for `$WIKI_PATH/SCHEMA.md` (default `~/wiki/SCHEMA.md`) AND `llm-wiki` skill loadable
-   Cache all four booleans; this determines which Phase 3 sub-steps will run.
-5. **Test runner discovery** -- find the project's test command (look for `package.json` scripts, `Makefile`, `tests/run.sh`, `pytest.ini`, etc.). Cache for BUILD-1 verification.
-
-Report findings to the user as a one-block pre-flight summary, then enter PLAN-1.
-
-## Worked Example
-
-For a complete worked example (5 plan/build pairs, 11 issues addressed, 8 closed, 70/70 tests green, 6 commits, 1 PR), see [references/issue-resolution-workflow.md](references/issue-resolution-workflow.md).
+1. **Working directory** — `pwd`, `git rev-parse --show-toplevel`; cd to a user-provided path.
+2. **Git status** — `git status -sb`; uncommitted changes become part of the PR.
+3. **GitHub CLI** — `gh --version && gh auth status`; if unauthenticated, ask the user to `gh auth login` before phases 4/5.
+4. **Companion skills** — which soft-dep skills are loadable? For Phase 3, probe both layers (`graphify-out/` + graphify skill; `$WIKI_PATH/SCHEMA.md` + llm-wiki skill) and cache the booleans.
+5. **Test runner discovery** — find the test command (`package.json` scripts, `Makefile`, `tests/run.sh`, `pytest.ini`, ...); cache for BUILD-1.
 
 ## References
 
-- [references/plan-build-primitives.md](references/plan-build-primitives.md) -- plan/build mechanics for delegated execution (Mode B): Task-tool subagents and `claude -p` headless, including advanced patterns (multi-round, parallel worktrees, plan-only, build-only)
-- [references/issue-resolution-workflow.md](references/issue-resolution-workflow.md) -- The 6-phase FSM in detail, per-phase prompt shapes, failure/loop patterns, and a full worked example
-- [references/knowledge-layer-workflow.md](references/knowledge-layer-workflow.md) -- Phase 3 in detail: graphify + llm-wiki division of labor, trigger conditions, handoff between structural and editorial layers
-- [references/claude-code-cli-reference.md](references/claude-code-cli-reference.md) -- Complete `claude` CLI + subagent reference for delegated execution
+- [references/plan-build-primitives.md](references/plan-build-primitives.md) — plan/build mechanics for delegated execution (Modes B and C), advanced patterns
+- [references/issue-resolution-workflow.md](references/issue-resolution-workflow.md) — the 6-phase FSM in detail, per-phase prompt shapes, failure/loop patterns, worked example (5 pairs, 11 issues, 70/70 tests, 6 commits, 1 PR)
+- [references/knowledge-layer-workflow.md](references/knowledge-layer-workflow.md) — Phase 3: graphify + llm-wiki division of labor
+- [references/claude-code-cli-reference.md](references/claude-code-cli-reference.md) — complete `claude` CLI + subagent reference for delegated execution

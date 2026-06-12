@@ -2,10 +2,10 @@
 
 Mechanics for orchestrating the `plan` and `build` agents inside Claude Code. This is the **delegated execution mode** reference (Mode B). For the higher-level 6-phase lifecycle (problem -> fix -> docs -> ship -> close), see [SKILL.md](../SKILL.md).
 
-Claude Code gives you two ways to delegate a phase:
+Claude Code gives you two ways to delegate a phase — pick by who the orchestrator is:
 
-1. **In-process subagents via the Task tool** (recommended) — the bundled `plan` and `build` agents run in isolated context windows within the same Claude Code session.
-2. **Cross-process headless via `claude -p`** — shell out to a fresh Claude Code process per phase, resuming a session id. This is the literal analog of opencode's `opencode run -s`.
+1. **In-process subagents via the Task tool** (when Claude Code itself orchestrates) — the bundled `plan` and `build` agents run in isolated context windows within the same Claude Code session. No process spawn, no re-auth, no config reload.
+2. **Cross-process headless via `claude -p`** (when an external agent like Hermes orchestrates) — shell out to a fresh Claude Code process per phase, resuming a session id. This is the literal analog of opencode's `opencode run -s`. The Task tool does not exist outside a Claude Code session, so this is the only delegation path for external orchestrators — and each call must use the lean-worker flags below.
 
 ## The agents
 
@@ -74,24 +74,36 @@ Practically:
 
 If you want true session persistence across processes, use the `claude -p --resume` headless mode below instead of the Task tool.
 
-## Headless mode: `claude -p --resume`
+## Headless mode: `claude -p --resume` (Mode C — external orchestrators like Hermes)
 
-For cross-process delegation (orchestrator is an external script, or you want each phase in its own OS process):
+For cross-process delegation (orchestrator is an external agent or script), always use the **lean worker** flag set — a bare `claude -p` inherits the user's interactive model pin, all plugins/MCP servers, and `ask` permission rules that headless mode silently denies:
 
 ```bash
-# Phase 1: Plan — run in plan permission mode, capture the session id
-claude -p "Plan: <feature>. Produce the Phase-1 plan artifact." \
-  --permission-mode plan --output-format json > plan1.json
-SESSION_ID=$(jq -r '.session_id' plan1.json)
+LEAN="--setting-sources project --strict-mcp-config \
+      --output-format stream-json --verbose --max-budget-usd 5"
 
-# Phase 1: Build — resume the SAME session so plan context carries over
-claude -p --resume "$SESSION_ID" "Implement the approved plan. Loop until tests pass."
+# Phase 1: Plan — read-only enforced, capture the session id from the init event
+claude -p "Plan: <feature>. Produce the Phase-1 plan artifact." \
+  --permission-mode plan --model sonnet $LEAN > plan1.ndjson 2>&1
+SESSION_ID=$(jq -r 'select(.type=="system" and .subtype=="init") | .session_id' plan1.ndjson | head -1)
+
+# Phase 1: Build — resume the SAME session; re-pass flags (they are per-invocation)
+claude -p --resume "$SESSION_ID" "Implement the approved plan. Loop until tests pass." \
+  --permission-mode bypassPermissions --model sonnet $LEAN > build1.ndjson 2>&1 &
 
 # Phase 2: Plan — still the same session
-claude -p --resume "$SESSION_ID" "Check docs gaps and plan surgical updates."
+claude -p --resume "$SESSION_ID" "Check docs gaps and plan surgical updates." \
+  --permission-mode plan --model sonnet $LEAN > plan2.ndjson 2>&1
 ```
 
-`--resume <id>` is the analog of `opencode run -s <id>`. `--continue` resumes the most recent session (analog of `opencode run -c`). See [claude-code-cli-reference.md](claude-code-cli-reference.md) for the full flag list.
+Rules of thumb for the orchestrator:
+
+- **Run build workers in the background** and poll the NDJSON — build phases legitimately take minutes; don't block a foreground pipe.
+- **One concern per call** — split "waves" of unrelated tasks into separate worker calls so failures are isolated and progress is observable.
+- **Large artifacts via scripts** — never instruct a worker to hand-type a big fixture/dataset; have it write and run a generator script.
+- **Re-pass flags on every `--resume`** — the session restores conversation context, not configuration.
+
+`--resume <id>` is the analog of `opencode run -s <id>`. `--continue` resumes the most recent session (analog of `opencode run -c`). See [claude-code-cli-reference.md](claude-code-cli-reference.md) for the full flag list and the lean-worker rationale.
 
 ## Decision framework
 
