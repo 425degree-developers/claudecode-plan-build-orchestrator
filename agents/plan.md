@@ -2,7 +2,7 @@
 name: plan
 description: Read-only planning agent for the plan-build orchestrator. Investigates the codebase and produces a structured plan artifact (findings table, explicit assumptions, verifiable success criteria) without making any changes. Use for the PLAN-N phase of any plan/build pair.
 tools: Read, Glob, Grep, WebFetch, Bash
-model: inherit
+model: opus
 ---
 
 # Plan Agent

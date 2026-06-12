@@ -66,7 +66,7 @@ In Plan Mode the harness blocks edits, writes, and mutating commands, so a plan 
 | `--continue` / `-c`                  | Resume the most recent session                                     |
 | `--permission-mode <mode>`           | `plan`, `acceptEdits`, `bypassPermissions`, `default`, `dontAsk`, `auto` |
 | `--output-format <fmt>`              | `text` (default), `json` (buffered single result), `stream-json` (live NDJSON; requires `--verbose` with `-p`) |
-| `--model <model>`                    | Pin the model for this run (`sonnet`, `haiku`, `opus`, or full id). **Without it, workers inherit the user's interactive model pin.** |
+| `--model <model>`                    | Pin the model for this run (`sonnet`, `haiku`, `opus`, or full id). **Without it, workers inherit the user's interactive model pin.** Tier per phase: `opus` = PLAN-1/PLAN-5 diagnosis; `sonnet` = builds; `haiku` = commit/PR/close mechanics (see SKILL.md "Model Tiers per Phase"). |
 | `--setting-sources <list>`           | Which settings to load: `user`, `project`, `local`. `project` alone keeps workers free of user-level plugins/model pins/ask rules. |
 | `--strict-mcp-config`                | Only load MCP servers passed via `--mcp-config`; ignore all configured ones |
 | `--max-budget-usd <n>`               | Hard cost cap for the run (`-p` only). Current builds have **no `--max-turns`** — this is the runaway backstop. |

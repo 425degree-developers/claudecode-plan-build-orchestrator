@@ -57,6 +57,16 @@ PLAN-1 Problem analysis (root causes, assumptions, criteria) -> HARD GATE: user 
 - **SOFT gates (after PLAN-2, PLAN-4, PLAN-5):** present output and auto-proceed to build **unless** there is a literal open question the agent cannot resolve from context (ambiguous scope, conflicting preferences, missing credentials). If zero open questions, announce "Proceeding to BUILD-N" and continue.
 - **No gates** after PLAN-3 or after any BUILD — auto-chain unconditionally; the build summary block is the handoff signal.
 
+## Model Tiers per Phase
+
+Match the model to the cognitive load of the phase. Reasoning-heavy diagnosis gets the strong model; execution against an approved plan does not. In Mode C pass `--model` per worker; in Mode B the bundled agents pin tiers (`plan`: opus, `build`: sonnet) — override per phase where it deviates.
+
+| Tier | Alias | Phases | Why |
+| ---- | ----- | ------ | --- |
+| **Strong** | `opus` (best available) | PLAN-1 (requirements, root-cause pinpointing), PLAN-5 (issue triage against the codebase) | Defining scope and diagnosing problems — getting these wrong wastes the whole pipeline. Triage is diagnosis, not bookkeeping. |
+| **General** | `sonnet` | BUILD-1/2/3 (code/doc/knowledge edits following the plan), PLAN-2/PLAN-3 (gap matrices derived from Phase-1 output) | The plan already did the thinking; execution targets explicit, verifiable criteria. |
+| **Weakest** | `haiku` | PLAN-4 + BUILD-4 (commit breakdown, push, draft PR, PR monitoring), BUILD-5 (`gh issue close`/`comment`) | Pure git/gh mechanics with single-command verification. |
+
 ## Execution: Three Modes
 
 Pick the mode by **who the orchestrator is** — not by subscription tier:
@@ -114,8 +124,8 @@ Why each flag matters (all verified against CLI 2.1.x):
 
 | Flag | Why |
 | ---- | --- |
-| `--model sonnet` | Workers otherwise inherit the user's pinned interactive model (e.g. `claude-fable-5[1m]`). Build work is mechanical — use `sonnet` (or `haiku` for trivial tasks); reserve the big model for PLAN-1 if anywhere. |
-| `--permission-mode bypassPermissions` | Headless runs cannot answer prompts; `ask` rules become denials. `acceptEdits` only covers file edits — Bash still asks. In a trusted sandbox, bypass; otherwise scope with `--allowedTools "Edit Write Read Glob Grep Bash(*)"`. |
+| `--model <tier>` | Workers otherwise inherit the user's pinned interactive model (e.g. `claude-fable-5[1m]`). Pick per phase from the [Model Tiers table](#model-tiers-per-phase): `opus` for PLAN-1/PLAN-5 diagnosis, `sonnet` for builds, `haiku` for commit/PR/close mechanics. |
+| `--permission-mode bypassPermissions` | Headless runs cannot answer prompts; `ask` rules become denials. `acceptEdits` only covers file edits — Bash still asks. In a trusted sandbox, bypass; otherwise scope with `--allowedTools "Edit Write Read Glob Grep Bash(*)"`. **Running as root, the CLI blocks `bypassPermissions` — fall back to `--permission-mode auto` (verified working) or an explicit `--allowedTools` list.** |
 | `--setting-sources project` | Skips user-level settings: no global plugin/MCP loading, no inherited model pin, no interactive `ask` rules. Project `.claude/settings.json` (if any) still applies. |
 | `--strict-mcp-config` | No MCP servers unless explicitly passed via `--mcp-config`. Stops playwright/context7-style servers from spawning into every worker. |
 | `--output-format stream-json --verbose` | Emits NDJSON events live. The orchestrator can `tail -f` for liveness instead of staring at a silent buffered pipe for minutes. (`stream-json` requires `--verbose` with `-p`.) |

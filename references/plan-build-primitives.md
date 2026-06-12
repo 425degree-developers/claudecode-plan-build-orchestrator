@@ -82,19 +82,27 @@ For cross-process delegation (orchestrator is an external agent or script), alwa
 LEAN="--setting-sources project --strict-mcp-config \
       --output-format stream-json --verbose --max-budget-usd 5"
 
-# Phase 1: Plan — read-only enforced, capture the session id from the init event
+# Phase 1: Plan — STRONG model (requirements + root-cause diagnosis); capture session id
 claude -p "Plan: <feature>. Produce the Phase-1 plan artifact." \
-  --permission-mode plan --model sonnet $LEAN > plan1.ndjson 2>&1
+  --permission-mode plan --model opus $LEAN > plan1.ndjson 2>&1
 SESSION_ID=$(jq -r 'select(.type=="system" and .subtype=="init") | .session_id' plan1.ndjson | head -1)
 
-# Phase 1: Build — resume the SAME session; re-pass flags (they are per-invocation)
+# Phase 1: Build — GENERAL model (executes the approved plan); re-pass flags every call
 claude -p --resume "$SESSION_ID" "Implement the approved plan. Loop until tests pass." \
   --permission-mode bypassPermissions --model sonnet $LEAN > build1.ndjson 2>&1 &
 
-# Phase 2: Plan — still the same session
+# Phase 2: Plan — GENERAL model (gap matrix derived from Phase-1 output)
 claude -p --resume "$SESSION_ID" "Check docs gaps and plan surgical updates." \
   --permission-mode plan --model sonnet $LEAN > plan2.ndjson 2>&1
+
+# Phase 4: Commit + PR — WEAKEST model (pure git/gh mechanics)
+claude -p --resume "$SESSION_ID" "Execute the commit plan: branch, commits, push, draft PR." \
+  --permission-mode bypassPermissions --model haiku $LEAN > build4.ndjson 2>&1
+
+# Phase 5: Triage plan — STRONG again (diagnosis against the codebase); BUILD-5 close/comment -> haiku
 ```
+
+Model per phase follows the [Model Tiers table in SKILL.md](../SKILL.md#model-tiers-per-phase): `opus` for PLAN-1/PLAN-5, `sonnet` for builds and derived plans, `haiku` for commit/PR/close mechanics.
 
 Rules of thumb for the orchestrator:
 
