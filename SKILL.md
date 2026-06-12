@@ -125,7 +125,7 @@ Why each flag matters (all verified against CLI 2.1.x):
 | Flag | Why |
 | ---- | --- |
 | `--model <tier>` | Workers otherwise inherit the user's pinned interactive model (e.g. `claude-fable-5[1m]`). Pick per phase from the [Model Tiers table](#model-tiers-per-phase): `opus` for PLAN-1/PLAN-5 diagnosis, `sonnet` for builds, `haiku` for commit/PR/close mechanics. |
-| `--permission-mode bypassPermissions` | Headless runs cannot answer prompts; `ask` rules become denials. `acceptEdits` only covers file edits — Bash still asks. In a trusted sandbox, bypass; otherwise scope with `--allowedTools "Edit Write Read Glob Grep Bash(*)"`. |
+| `--permission-mode bypassPermissions` | Headless runs cannot answer prompts; `ask` rules become denials. `acceptEdits` only covers file edits — Bash still asks. In a trusted sandbox, bypass; otherwise scope with `--allowedTools "Edit Write Read Glob Grep Bash(*)"`. **Running as root, the CLI blocks `bypassPermissions` — fall back to `--permission-mode auto` (verified working) or an explicit `--allowedTools` list.** |
 | `--setting-sources project` | Skips user-level settings: no global plugin/MCP loading, no inherited model pin, no interactive `ask` rules. Project `.claude/settings.json` (if any) still applies. |
 | `--strict-mcp-config` | No MCP servers unless explicitly passed via `--mcp-config`. Stops playwright/context7-style servers from spawning into every worker. |
 | `--output-format stream-json --verbose` | Emits NDJSON events live. The orchestrator can `tail -f` for liveness instead of staring at a silent buffered pipe for minutes. (`stream-json` requires `--verbose` with `-p`.) |
